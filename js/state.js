@@ -22,7 +22,10 @@ export const state = freshState();
 
 function migrate(s) {
   if (!s || typeof s !== 'object') return null;
-  // тут з'являтимуться перетворення старих версій збереження
+  // v1 → v2: змінився список прокачок і правило цілі, тестові збереження скидаємо.
+  if ((s.version || 1) < 2) return null;
+  // v2 → v3: прогрес і прокачки зберігаються як є. Якщо рівень Білого був «завершений» — ведемо до Вуйка.
+  if (s.version === 2 && s.levelDone) { s.levelDone = false; s.levelIdx = 1; s.locIdx = 0; }
   return { ...freshState(), ...s, version: RULES.saveVersion };
 }
 

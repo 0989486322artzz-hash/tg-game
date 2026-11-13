@@ -18,6 +18,7 @@ export function setBackground() {
   lastBg = key;
   // Якщо картинки немає — видно запасний градієнт.
   $('bg').style.backgroundImage = `url("${loc.bg}"), ${loc.fallback}`;
+  $('bgBlur').style.backgroundImage = `url("${loc.bg}"), ${loc.fallback}`;
 }
 
 export function renderMain() {
@@ -27,10 +28,14 @@ export function renderMain() {
   $('perTap').textContent = `+${E.fmt(E.tapValue())} ${cur} / тап`;
   $('perSec').textContent = `${E.fmt(E.perSecond())} ${cur} / с`;
   $('where').textContent = `${lvl.name} · ${loc ? loc.name : '—'}`;
+  $('hint').textContent = `Тапай — годуй ${E.friend()?.gen || lvl.name} грошима 💵`;
 
   if (loc) {
-    const got = Math.min(state.locEarned, loc.goal);
-    $('goalLabel').textContent = `Заробити ${loc.where}`;
+    const got = Math.min(E.goalProgress(), loc.goal);
+    const next = E.nextLocation();
+    $('goalLabel').textContent = RULES.travelSpendsGoal
+      ? (next ? `Накопичити на дорогу ${next.to}` : `Накопичити ${loc.where}`)
+      : `Заробити ${loc.where}`;
     $('goalNums').textContent = `${E.fmt(got)} / ${E.fmt(loc.goal)} ${cur}`;
     $('goalBar').style.transform = `scaleX(${(got / loc.goal).toFixed(4)})`;
   }
@@ -38,7 +43,9 @@ export function renderMain() {
   const btn = $('moveBtn');
   if (E.goalReached() && !state.levelDone) {
     const next = E.nextLocation();
-    btn.textContent = next ? `🚗 Поїхати ${next.to}` : `🏁 Завершити рівень «${lvl.name}»`;
+    const cost = RULES.travelSpendsGoal ? ` · −${money(loc.goal)}` : '';
+    btn.textContent = next ? `🚗 Поїхати ${next.to}${cost}` : `🏁 Завершити рівень «${lvl.name}»${cost}`;
+    btn.classList.toggle('final', !next);
     btn.classList.remove('hidden');
   } else {
     btn.classList.add('hidden');
@@ -50,26 +57,25 @@ export function renderMain() {
 export function renderMap() {
   const list = $('mapList');
   const html = [];
+  // Наступні друзі й локації — секрет: показуємо тільки те, до чого вже дійшли.
   LEVELS.forEach((lvl, li) => {
+    if (li > state.levelIdx) return;
     html.push(`<div class="group-title">Рівень ${li + 1} · ${lvl.name}</div>`);
-    if (lvl.locked || !lvl.locations.length) {
-      html.push(`<div class="loc locked"><div class="thumb" style="background:#222;display:grid;place-items:center;font-size:24px">❔</div>
-        <div><div class="name">${lvl.name}</div><div class="sub">Відкриється після ${LEVELS[li - 1]?.name || ''}</div></div><div class="st">🔒</div></div>`);
-      return;
-    }
     lvl.locations.forEach((id, i) => {
+      if (li === state.levelIdx && i > state.locIdx) return;
       const loc = LOCATIONS.find((l) => l.id === id);
       let cls = 'locked', st = '🔒', sub = `Ціль: ${money(loc.goal)}`;
       const done = li < state.levelIdx || (li === state.levelIdx && (i < state.locIdx || state.levelDone));
       const now = li === state.levelIdx && i === state.locIdx && !state.levelDone;
-      if (done) { cls = 'done'; st = '✅'; sub = `Зароблено ${money(loc.goal)}`; }
-      else if (now) { cls = 'current'; st = '📍'; sub = `${money(Math.min(state.locEarned, loc.goal))} з ${money(loc.goal)}`; }
+      if (done) { cls = 'done'; st = '✅'; sub = `Накопичено ${money(loc.goal)}`; }
+      else if (now) { cls = 'current'; st = '📍'; sub = `${money(Math.min(E.goalProgress(), loc.goal))} з ${money(loc.goal)}`; }
       html.push(`<div class="loc ${cls}">
         <div class="thumb" style='background-image:url("${loc.bg}"), ${loc.fallback}'></div>
         <div><div class="name">${loc.name}</div><div class="sub">${sub}</div></div>
         <div class="st">${st}</div></div>`);
     });
   });
+  html.push(`<div class="secret">🔒 Далі — секрет. Накопичуй, щоб дізнатися.</div>`);
   list.innerHTML = html.join('');
 }
 
@@ -84,18 +90,30 @@ export function showOverlay(html, btnText, onClose) {
   }, { once: true });
 }
 
-export function travelHtml(loc) {
-  return `<div class="road"><span class="car">🚗</span></div>
-    <h3>Білий їде ${loc.to}!</h3>
-    <p>Новий Ланос, нова ціль: заробити <b>${money(loc.goal)}</b> ${loc.where}. Нові прокачки вже відкриті.</p>`;
+function newUpgradesLine(loc) {
+  const n = E.newUpgradesAt(loc.id);
+  return n ? `<div class="newups">🔓 Відкрито нових прокачок: <b>${n}</b></div>` : '';
 }
 
-export function levelDoneHtml(lvl) {
-  const next = LEVELS[state.levelIdx + 1];
-  const last = E.levelLocations().at(-1);
+export function travelHtml(loc) {
+  return `<div class="road"><span class="car">🚗</span></div>
+    <h3>${E.level().name} їде ${loc.to}!</h3>
+    <p>Нова ціль: накопичити <b>${money(loc.goal)}</b> ${loc.where}.</p>${newUpgradesLine(loc)}`;
+}
+
+// Перехід до нового друга (prev — рівень, який щойно пройшли).
+export function newFriendHtml(prev) {
+  const loc = E.location();
   return `<div class="big">🏆</div>
-    <h3>${lvl.name} підняв ${money(last.goal)} ${last.where}!</h3>
-    <p>Рівень «${lvl.name}» пройдено. ${next ? `Далі: <b>${next.name}</b> — скоро.` : ''}</p>`;
+    <h3>Рівень «${prev.name}» пройдено!</h3>
+    <p>Новий друг: <b>${E.level().name}</b> 🎉<br>Він чекає ${loc.where}. Усі прокачки залишаються з тобою.</p>
+    <p>Ціль: накопичити <b>${money(loc.goal)}</b>.</p>${newUpgradesLine(loc)}`;
+}
+
+export function gameEndHtml() {
+  return `<div class="big">👑</div>
+    <h3>Усіх друзів нагодовано!</h3>
+    <p>Нові друзі й локації — скоро. Слідкуй за оновленнями.</p>`;
 }
 
 export function offlineHtml(gain) {

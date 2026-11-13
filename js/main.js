@@ -2,8 +2,8 @@
 import { RULES } from './config.js';
 import { state, load, save, reset } from './state.js';
 import * as E from './engine.js';
-import { setBackground, renderMain, showOverlay, travelHtml, levelDoneHtml, offlineHtml } from './ui/screens.js';
-import { initMenu, renderShop, toggle } from './ui/menu.js';
+import { setBackground, renderMain, showOverlay, travelHtml, newFriendHtml, gameEndHtml, offlineHtml } from './ui/screens.js';
+import { initMenu, renderShop, rebuildShop, toggle } from './ui/menu.js';
 import { initEffects, floatText, haptic, sfx, unlockAudio, pulse } from './ui/effects.js';
 
 const tg = window.Telegram?.WebApp;
@@ -53,20 +53,19 @@ function onBuy(id) {
 }
 
 function onMove() {
+  const prev = E.level();
   const res = E.advance();
   if (!res) return;
   toggle(null);
+  rebuildShop();
   save();
   haptic('success');
   sfx.win();
-  if (res === 'location') {
-    setBackground();
-    renderMain();
-    showOverlay(travelHtml(E.location()), 'Погнали! 💵');
-  } else {
-    renderMain();
-    showOverlay(levelDoneHtml(E.level()), 'Круто!');
-  }
+  setBackground();
+  renderMain();
+  if (res === 'location') showOverlay(travelHtml(E.location()), 'Погнали! 💵');
+  else if (res === 'level') showOverlay(newFriendHtml(prev), `Годувати ${E.friend()?.gen || ''} 💵`);
+  else showOverlay(gameEndHtml(), 'Круто!');
 }
 
 // ── Цикл
@@ -107,10 +106,11 @@ function initDebug() {
   const d = $('debug');
   d.classList.remove('hidden');
   d.innerHTML = `<pre></pre>
-    <button data-a="m">+1000 $</button><button data-a="t">час ×10</button><button data-a="r">скинути</button>`;
+    <button data-a="m">+1000 $</button><button data-a="g">+ціль</button><button data-a="t">час ×10</button><button data-a="r">скинути</button>`;
   d.addEventListener('click', (e) => {
     const a = e.target.dataset?.a;
     if (a === 'm') { E.earn(1000); }
+    if (a === 'g') { E.earn(E.location()?.goal || 0); }
     if (a === 't') { timeScale = timeScale === 1 ? 10 : 1; e.target.textContent = `час ×${timeScale === 1 ? 10 : 1}`; }
     if (a === 'r') { reset(); location.reload(); }
   });
@@ -124,6 +124,7 @@ async function start() {
   await load();
 
   const gain = E.applyOffline(state.lastSeen);
+  rebuildShop();
   setBackground();
   renderMain();
   renderShop();
@@ -143,9 +144,11 @@ async function start() {
   });
   window.addEventListener('pagehide', save);
   document.addEventListener('contextmenu', (e) => e.preventDefault());
+  // сторінка ніколи не прокручується: гра завжди на весь екран
+  window.addEventListener('scroll', () => { if (window.scrollY || window.scrollX) window.scrollTo(0, 0); });
 
   if (gain > 0) showOverlay(offlineHtml(gain), 'Забрати 💵');
-  else if (state.levelDone) showOverlay(levelDoneHtml(E.level()), 'Ок');
+  else if (state.levelDone) showOverlay(gameEndHtml(), 'Ок');
 
   if (DEBUG) initDebug();
   save();

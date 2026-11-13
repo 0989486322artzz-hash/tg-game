@@ -4,40 +4,56 @@ import { state } from './state.js';
 import { LEVELS } from './data/levels.js';
 import { LOCATIONS } from './data/locations.js';
 import { UPGRADES } from './data/upgrades.js';
+import { FRIENDS } from './data/friends.js';
 
 const locById = Object.fromEntries(LOCATIONS.map((l) => [l.id, l]));
+// Наскрізний порядок усіх локацій усіх рівнів: tartak=0, vinnytsia=1 …
+const ORDER = LEVELS.flatMap((l) => l.locations);
+const orderOf = (locId) => ORDER.indexOf(locId);
 
 export const level = () => LEVELS[state.levelIdx];
 export const levelLocations = () => (level()?.locations || []).map((id) => locById[id]);
 export const location = () => levelLocations()[state.locIdx];
 export const nextLocation = () => levelLocations()[state.locIdx + 1] || null;
+export const nextLevel = () => LEVELS[state.levelIdx + 1] || null;
+export const friend = (lvl = level()) => FRIENDS.find((f) => f.id === lvl?.friendId);
+// Скільки локацій уже відкрито (наскрізно).
+export const globalIdx = () =>
+  LEVELS.slice(0, state.levelIdx).reduce((n, l) => n + l.locations.length, 0) + state.locIdx;
+export const locationSeen = (locId) => orderOf(locId) !== -1 && orderOf(locId) <= globalIdx();
 
 export const owned = (id) => state.owned[id] || 0;
 
-export function multiplier() {
-  return UPGRADES.filter((u) => u.type === 'boost')
+// Множник: target 'all' — увесь дохід, інакше — тільки своя група.
+export function multiplier(target = 'all') {
+  return UPGRADES.filter((u) => u.type === 'boost' && (u.target || 'all') === target)
     .reduce((m, u) => (owned(u.id) ? m * u.effect : m), 1);
 }
 
+function sumOf(type) {
+  return UPGRADES.filter((u) => u.type === type)
+    .reduce((s, u) => s + owned(u.id) * u.effect * multiplier(u.group), 0);
+}
+
 export function tapValue() {
-  const add = UPGRADES.filter((u) => u.type === 'tap').reduce((s, u) => s + owned(u.id) * u.effect, 0);
-  return (RULES.baseTap + add) * multiplier();
+  return (RULES.baseTap + sumOf('tap')) * multiplier('all');
 }
 
 export function perSecond() {
-  const base = UPGRADES.filter((u) => u.type === 'auto').reduce((s, u) => s + owned(u.id) * u.effect, 0);
-  return base * multiplier();
+  return sumOf('auto') * multiplier('all');
 }
 
 export function price(u) {
-  return Math.ceil(u.price * Math.pow(RULES.priceGrowth, owned(u.id)));
+  const g = u.growth ?? (u.type === 'tap' ? RULES.tapPriceGrowth : RULES.priceGrowth);
+  return Math.ceil(u.price * Math.pow(g, owned(u.id)));
 }
 
+// Прокачка відкрита, якщо гравець уже дійшов до її локації (на будь-якому рівні).
 export function isUnlocked(u) {
-  const ids = level()?.locations || [];
-  const need = ids.indexOf(u.unlock);
-  return need !== -1 && need <= state.locIdx;
+  return locationSeen(u.unlock);
 }
+
+export const newUpgradesAt = (locId) => UPGRADES.filter((u) => u.unlock === locId).length;
 
 export function isMaxed(u) {
   return u.max != null && owned(u.id) >= u.max;
@@ -68,21 +84,34 @@ export function buy(id) {
   return true;
 }
 
-export function goalReached() {
+// Прогрес цілі: накопичені гроші (або зароблені, якщо travelSpendsGoal = false).
+export function goalProgress() {
   const loc = location();
-  return !!loc && state.locEarned >= loc.goal;
+  if (!loc) return 0;
+  return RULES.travelSpendsGoal ? state.money : state.locEarned;
 }
 
-// Переїзд у наступну локацію або завершення рівня.
+export function goalReached() {
+  const loc = location();
+  return !!loc && goalProgress() >= loc.goal;
+}
+
+// Переїзд: наступна локація → наступний друг → кінець гри (поки що).
 export function advance() {
   if (!goalReached()) return null;
+  if (RULES.travelSpendsGoal) state.money -= location().goal;
+  state.locEarned = 0;
   if (nextLocation()) {
     state.locIdx += 1;
-    state.locEarned = 0;
     return 'location';
   }
+  if (nextLevel()) {
+    state.levelIdx += 1;
+    state.locIdx = 0;
+    return 'level';
+  }
   state.levelDone = true;
-  return 'level';
+  return 'end';
 }
 
 export function tick(dt) {
@@ -107,8 +136,8 @@ export function fmt(n) {
   n = Math.abs(n);
   if (n < 10 && n % 1) return sign + n.toFixed(1);
   if (n < 1000) return sign + Math.floor(n).toString();
-  if (n < 100000) return sign + Math.floor(n).toLocaleString('uk-UA').replace(/\s/g, ' ');
-  const units = ['K', 'M', 'B', 'T', 'Qa', 'Qi'];
+  if (n < 1000000) return sign + Math.floor(n).toLocaleString('uk-UA').replace(/\s/g, ' ');
+  const units = ['K', 'M', 'B', 'T', 'Qa', 'Qi', 'Sx', 'Sp', 'Oc', 'No', 'Dc'];
   let i = -1;
   while (n >= 1000 && i < units.length - 1) { n /= 1000; i++; }
   return sign + (n < 100 ? n.toFixed(1).replace(/\.0$/, '') : Math.floor(n)) + units[i];
